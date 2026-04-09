@@ -360,11 +360,6 @@ class ES_VideoTransfer:
         stl_frs = batched_tensor_to_cv2_list(style_images)
         stl_idxes = sorted(deserialize_integers(style_idxes))
 
-        if len(stl_frs) != len(stl_idxes):
-            raise ValueError(
-                f"Style indices mismatch: There are {len(stl_frs)}, but only [{stl_idxes}]"
-            )
-
         if source_mask is not None:
             print(f"{source_mask.shape=}")
             msk_frs_seq = batched_tensor_to_cv2_list(
@@ -372,6 +367,8 @@ class ES_VideoTransfer:
             )
         else:
             msk_frs_seq = None
+
+        _validate_inputs(len(img_frs_seq), stl_frs, stl_idxes, msk_frs_seq)
 
         ezrunner = EzsynthBase(
             style_frs=stl_frs,
@@ -561,11 +558,6 @@ class ES_VideoTransferExtra:
         stl_frs = batched_tensor_to_cv2_list(style_images)
         stl_idxes = sorted(deserialize_integers(style_idxes))
 
-        if len(stl_frs) != len(stl_idxes):
-            raise ValueError(
-                f"Style indices mismatch: There are {len(stl_frs)}, but only [{stl_idxes}]"
-            )
-
         if source_mask is not None:
             print(f"{source_mask.shape=}")
             msk_frs_seq = batched_tensor_to_cv2_list(
@@ -573,6 +565,8 @@ class ES_VideoTransferExtra:
             )
         else:
             msk_frs_seq = None
+
+        _validate_inputs(len(img_frs_seq), stl_frs, stl_idxes, msk_frs_seq)
 
         edge_guides = None
         if source_edge is not None:
@@ -651,6 +645,40 @@ class ES_VideoTransferExtra:
             style_tensor,
             err_tensor,
             flow_tensor,
+        )
+
+
+def _validate_inputs(
+    n_frames: int,
+    stl_frs: list,
+    stl_idxes: list[int],
+    msk_frs_seq: list | None = None,
+) -> None:
+    """Raise a clear ValueError before any heavy processing starts."""
+    if len(stl_frs) != len(stl_idxes):
+        raise ValueError(
+            f"Style count mismatch: {len(stl_frs)} image(s) but "
+            f"{len(stl_idxes)} index/indices ({stl_idxes}). "
+            "They must be equal."
+        )
+    out_of_range = [idx for idx in stl_idxes if not (0 <= idx < n_frames)]
+    if out_of_range:
+        raise ValueError(
+            f"Style index/indices out of range for a {n_frames}-frame video "
+            f"(valid: 0–{n_frames - 1}): {out_of_range}. "
+            "Indices are 0-based."
+        )
+    if len(set(stl_idxes)) != len(stl_idxes):
+        seen, dupes = set(), []
+        for idx in stl_idxes:
+            if idx in seen:
+                dupes.append(idx)
+            seen.add(idx)
+        raise ValueError(f"Duplicate style indices are not allowed: {dupes}.")
+    if msk_frs_seq is not None and len(msk_frs_seq) != n_frames:
+        raise ValueError(
+            f"Mask frame count ({len(msk_frs_seq)}) must match "
+            f"source video frame count ({n_frames})."
         )
 
 
