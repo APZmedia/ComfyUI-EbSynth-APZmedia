@@ -304,6 +304,8 @@ class ES_VideoTransfer:
             "required": required,
             "optional": {
                 "source_mask": ("IMAGE",),
+                "skip_ranges": ("STRING", {"default": "", "multiline": False,
+                    "tooltip": "Frame ranges to replace with source, e.g. 141-242, 250-260"}),
             },
         }
 
@@ -348,11 +350,13 @@ class ES_VideoTransfer:
         use_poisson_cupy: bool,
         poisson_maxiter: int,
         source_mask: torch.Tensor | None = None,
+        skip_ranges: str = "",
     ):
         print(f"{source_video.shape=}")
         print(f"{style_images.shape=}")
 
         img_frs_seq = batched_tensor_to_cv2_list(source_video)
+        skip_set = _parse_skip_ranges(skip_ranges, len(img_frs_seq))
         stl_frs = batched_tensor_to_cv2_list(style_images)
         stl_idxes = sorted(deserialize_integers(style_idxes))
 
@@ -398,15 +402,24 @@ class ES_VideoTransfer:
             msk_frs_seq=msk_frs_seq,
         )
 
-        # Ezsynth off-by-one: the last sequence gets fr_end_idx = len(video)
-        # which causes an IndexError when the loop accesses img_frs_seq[i + step]
-        # on the final frame. Clamp all sequence bounds to valid indices.
+        # Ezsynth off-by-one: clamp sequence bounds to valid frame indices.
         _n = len(img_frs_seq)
         for _seq in ezrunner.sequences:
             _seq.fr_end_idx = min(_seq.fr_end_idx, _n - 1)
             _seq.fr_start_idx = min(_seq.fr_start_idx, _n - 1)
 
+        if skip_set:
+            _skip_sequences(ezrunner, skip_set)
+
         stylized_frames, err_frames = ezrunner.run_sequences()
+
+        # Replace any skip-range frames with original source frames.
+        if skip_set:
+            for i in skip_set:
+                if 0 <= i < len(stylized_frames):
+                    stylized_frames[i] = img_frs_seq[i]
+                    err_frames[i] = img_frs_seq[i]
+
         style_tensor = out_video(stylized_frames)
         err_tensor = out_video(err_frames)
 
@@ -486,6 +499,8 @@ class ES_VideoTransferExtra:
             "optional": {
                 "source_mask": ("IMAGE",),
                 "source_edge": ("IMAGE",),
+                "skip_ranges": ("STRING", {"default": "", "multiline": False,
+                    "tooltip": "Frame ranges to replace with source, e.g. 141-242, 250-260"}),
             },
         }
 
@@ -535,11 +550,13 @@ class ES_VideoTransferExtra:
         poisson_maxiter: int,
         source_mask: torch.Tensor | None = None,
         source_edge: torch.Tensor | None = None,
+        skip_ranges: str = "",
     ):
         print(f"{source_video.shape=}")
         print(f"{style_images.shape=}")
 
         img_frs_seq = batched_tensor_to_cv2_list(source_video)
+        skip_set = _parse_skip_ranges(skip_ranges, len(img_frs_seq))
         stl_frs = batched_tensor_to_cv2_list(style_images)
         stl_idxes = sorted(deserialize_integers(style_idxes))
 
@@ -602,15 +619,24 @@ class ES_VideoTransferExtra:
         if not do_compute_edge and edge_guides is not None:
             ezrunner.edge_guides = edge_guides
 
-        # Ezsynth off-by-one: same clamp as ES_VideoTransfer (see above).
+        # Ezsynth off-by-one: clamp sequence bounds to valid frame indices.
         _n = len(img_frs_seq)
         for _seq in ezrunner.sequences:
             _seq.fr_end_idx = min(_seq.fr_end_idx, _n - 1)
             _seq.fr_start_idx = min(_seq.fr_start_idx, _n - 1)
 
+        if skip_set:
+            _skip_sequences(ezrunner, skip_set)
+
         stylized_frames, err_frames, flow_frames = ezrunner.run_sequences_full(
             return_flow=return_flow
         )
+        if skip_set:
+            for i in skip_set:
+                if 0 <= i < len(stylized_frames):
+                    stylized_frames[i] = img_frs_seq[i]
+                    err_frames[i] = img_frs_seq[i]
+
         style_tensor = out_video(stylized_frames)
         err_tensor = out_video(err_frames)
 
@@ -624,6 +650,47 @@ class ES_VideoTransferExtra:
             err_tensor,
             flow_tensor,
         )
+
+
+def _parse_skip_ranges(s: str, n: int) -> set[int]:
+    """Parse '141-242, 250-260' into a set of frame indices, clamped to [0, n)."""
+    skip: set[int] = set()
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            skip.update(range(max(0, int(a.strip())), min(int(b.strip()) + 1, n)))
+        else:
+            idx = int(part.strip())
+            if 0 <= idx < n:
+                skip.add(idx)
+    return skip
+
+
+def _skip_sequences(ezrunner, skip_set: set[int]) -> None:
+    """Drop sequences whose entire frame range is inside skip_set.
+    This avoids running EbSynth + RAFT on those segments entirely.
+    Partial overlaps are left untouched — their frames get replaced in
+    the output after the fact."""
+    keep_seqs, keep_atlas = [], []
+    for seq, av in zip(ezrunner.sequences, ezrunner.atlas):
+        seq_frames = set(range(seq.fr_start_idx, seq.fr_end_idx + 1))
+        if seq_frames.issubset(skip_set):
+            print(
+                f"[comfyui-ebsynth] Skipping sequence "
+                f"[{seq.fr_start_idx}, {seq.fr_end_idx}] — fully in skip range"
+            )
+        else:
+            keep_seqs.append(seq)
+            keep_atlas.append(av)
+    dropped = len(ezrunner.sequences) - len(keep_seqs)
+    if dropped:
+        print(f"[comfyui-ebsynth] {dropped} sequence(s) skipped, {len(keep_seqs)} will run")
+    ezrunner.sequences = keep_seqs
+    ezrunner.atlas = keep_atlas
+    ezrunner.num_seqs = len(keep_seqs)
 
 
 def serialize_floats(lst: list[float]):
