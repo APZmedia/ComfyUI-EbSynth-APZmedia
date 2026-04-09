@@ -23,7 +23,6 @@ from .Ezsynth.ezsynth.constants import (
 )
 from .Ezsynth.ezsynth.main_ez import EzsynthBase, ImageSynthBase
 from .Ezsynth.ezsynth.utils.flow_utils.OpticalFlow import RAFT_flow
-from . import ensure_cupy, CUPY_AVAILABLE
 from .utils import (
     batched_tensor_to_cv2_list,
     cv2_img_to_tensor,
@@ -353,9 +352,6 @@ class ES_VideoTransfer:
         print(f"{source_video.shape=}")
         print(f"{style_images.shape=}")
 
-        if use_poisson_cupy and not CUPY_AVAILABLE:
-            use_poisson_cupy = ensure_cupy()
-
         img_frs_seq = batched_tensor_to_cv2_list(source_video)
         stl_frs = batched_tensor_to_cv2_list(style_images)
         stl_idxes = sorted(deserialize_integers(style_idxes))
@@ -401,6 +397,14 @@ class ES_VideoTransfer:
             do_mask=do_mask,
             msk_frs_seq=msk_frs_seq,
         )
+
+        # Ezsynth off-by-one: the last sequence gets fr_end_idx = len(video)
+        # which causes an IndexError when the loop accesses img_frs_seq[i + step]
+        # on the final frame. Clamp all sequence bounds to valid indices.
+        _n = len(img_frs_seq)
+        for _seq in ezrunner.sequences:
+            _seq.fr_end_idx = min(_seq.fr_end_idx, _n - 1)
+            _seq.fr_start_idx = min(_seq.fr_start_idx, _n - 1)
 
         stylized_frames, err_frames = ezrunner.run_sequences()
         style_tensor = out_video(stylized_frames)
@@ -535,9 +539,6 @@ class ES_VideoTransferExtra:
         print(f"{source_video.shape=}")
         print(f"{style_images.shape=}")
 
-        if use_poisson_cupy and not CUPY_AVAILABLE:
-            use_poisson_cupy = ensure_cupy()
-
         img_frs_seq = batched_tensor_to_cv2_list(source_video)
         stl_frs = batched_tensor_to_cv2_list(style_images)
         stl_idxes = sorted(deserialize_integers(style_idxes))
@@ -600,6 +601,12 @@ class ES_VideoTransferExtra:
 
         if not do_compute_edge and edge_guides is not None:
             ezrunner.edge_guides = edge_guides
+
+        # Ezsynth off-by-one: same clamp as ES_VideoTransfer (see above).
+        _n = len(img_frs_seq)
+        for _seq in ezrunner.sequences:
+            _seq.fr_end_idx = min(_seq.fr_end_idx, _n - 1)
+            _seq.fr_start_idx = min(_seq.fr_start_idx, _n - 1)
 
         stylized_frames, err_frames, flow_frames = ezrunner.run_sequences_full(
             return_flow=return_flow
