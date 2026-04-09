@@ -94,6 +94,18 @@ pip install -r requirements.txt
 
 You may also install Cupy and Cupyx to use GPU for some other operations.
 
+### Automatic submodule bootstrapping
+
+The node depends on [FuouM/Ezsynth](https://github.com/FuouM/Ezsynth) as a git submodule. When installed via ComfyUI-Manager or copied as a flat directory (no `.git` history), the submodule is not automatically populated by git.
+
+To handle this, `__init__.py` now bootstraps the submodule on first load:
+
+1. If `Ezsynth/ezsynth/` is missing, it first attempts `git submodule update --init --recursive` (works when the node was cloned with git).
+2. If that fails or leaves the directory empty (flat/Manager installs), it falls back to `git clone https://github.com/FuouM/Ezsynth` directly.
+3. After cloning, it creates `Ezsynth/__init__.py` if absent so Python can resolve the relative imports from `run.py`.
+
+The clone happens once on first startup and is silent on all subsequent launches. A working internet connection and `git` in PATH are required on that first run.
+
 ## Credits
 
 jamriska - https://github.com/jamriska/ebsynth
