@@ -418,6 +418,7 @@ class ES_VideoTransfer:
             for i in skip_set:
                 if 0 <= i < len(stylized_frames):
                     stylized_frames[i] = img_frs_seq[i]
+                if 0 <= i < len(err_frames):
                     err_frames[i] = img_frs_seq[i]
 
         style_tensor = out_video(stylized_frames)
@@ -635,6 +636,7 @@ class ES_VideoTransferExtra:
             for i in skip_set:
                 if 0 <= i < len(stylized_frames):
                     stylized_frames[i] = img_frs_seq[i]
+                if 0 <= i < len(err_frames):
                     err_frames[i] = img_frs_seq[i]
 
         style_tensor = out_video(stylized_frames)
