@@ -6,6 +6,7 @@
 """
 
 import cv2
+import numpy as np
 import torch
 
 from .constants import EBTYPES, MAX_GUIDES, ONLY_DEFAULT_MODE, ONLY_MODES
@@ -21,12 +22,61 @@ from .Ezsynth.ezsynth.constants import (
     FLOW_DIFF_MODEL,
 )
 from .Ezsynth.ezsynth.main_ez import EzsynthBase, ImageSynthBase
+from .Ezsynth.ezsynth.utils.flow_utils.OpticalFlow import RAFT_flow
 from .utils import (
     batched_tensor_to_cv2_list,
     cv2_img_to_tensor,
     out_video,
     resize_cv2_list,
 )
+
+# ── Performance patches ───────────────────────────────────────────────────────
+
+# 1. RAFT model cache
+#    RAFT_flow.__init__ calls torch.load + model.to(GPU) on every instantiation.
+#    We intercept it and return the already-loaded model when the (arch, model)
+#    combination has been seen before — turning a ~3-5 s disk+GPU transfer into
+#    a dict lookup on every run after the first.
+_rafter_cache: dict[tuple[str, str], "RAFT_flow"] = {}
+_raft_orig_init = RAFT_flow.__init__
+
+def _raft_cached_init(self, model_name: str = "sintel", arch: str = "RAFT"):
+    key = (model_name, arch)
+    if key in _rafter_cache:
+        self.__dict__.update(_rafter_cache[key].__dict__)
+        return
+    _raft_orig_init(self, model_name, arch)
+    # On single-GPU setups DataParallel adds scatter/gather overhead; unwrap it.
+    if torch.cuda.device_count() <= 1 and hasattr(self.model, "module"):
+        self.model = self.model.module
+    _rafter_cache[key] = self
+
+RAFT_flow.__init__ = _raft_cached_init
+
+# 2. Mixed-precision RAFT inference
+#    Wrapping the forward pass in autocast lets Tensor Cores process the
+#    attention/conv ops in fp16 (~2x throughput on Ampere/Ada GPUs).
+#    Output is cast back to float32 so downstream numpy code is unaffected.
+#    Also fixes a latent bug in the original: cv2.resize result was discarded.
+_raft_orig_compute = RAFT_flow._compute_flow
+
+def _raft_mp_compute(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
+    original_size = img1.shape[1::-1]
+    with torch.no_grad(), torch.autocast("cuda", enabled=torch.cuda.is_available()):
+        img1_t = self._load_tensor_from_numpy(img1)
+        img2_t = self._load_tensor_from_numpy(img2)
+        from .Ezsynth.ezsynth.utils.flow_utils.core.utils.utils import InputPadder
+        padder = InputPadder(img1_t.shape)
+        im1p, im2p = padder.pad(img1_t, img2_t)
+        _, flow_up = self.model(im1p, im2p, iters=20, test_mode=True)
+        flow_np = padder.unpad(flow_up[0]).permute(1, 2, 0).cpu().float().numpy()
+    if flow_np.shape[:2][::-1] != original_size:
+        flow_np = cv2.resize(flow_np, original_size)
+    return flow_np
+
+RAFT_flow._compute_flow = _raft_mp_compute
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 flow_all_models = []
 flow_all_models.extend([f"RAFT_{model}" for model in FLOW_MODELS])

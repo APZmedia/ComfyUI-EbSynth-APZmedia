@@ -106,6 +106,26 @@ To handle this, `__init__.py` now bootstraps the submodule on first load:
 
 The clone happens once on first startup and is silent on all subsequent launches. A working internet connection and `git` in PATH are required on that first run.
 
+## Performance improvements
+
+Or: *"why was it reloading a 3-5 second model to GPU every single time you clicked Queue Prompt?"*
+
+Glad you asked. It was. Every. Single. Time. We fixed that.
+
+### What was slow and why
+
+The original code was totally correct — it just had the enthusiasm of someone who treats every render like it's the first time they've ever seen a GPU. Here's what we changed:
+
+**RAFT model caching** — The optical flow model (`RAFT_flow`) was calling `torch.load` + `model.to(GPU)` on every node execution. That's 3–5 seconds of disk and PCIe bus time before your first frame even started processing. We now cache the loaded model in memory by `(arch, model_name)` and return it instantly on subsequent runs. First run still pays the toll. Everything after that: free.
+
+**DataParallel removed on single-GPU setups** — The model was wrapped in `torch.nn.DataParallel` even when you have one GPU. DataParallel is designed to split work across multiple devices, so on a single GPU it just adds overhead (scatter input → process → gather output) for absolutely no benefit. We unwrap it automatically when only one GPU is present. DataParallel: you had one job.
+
+**Mixed-precision RAFT inference** — RAFT's forward pass now runs under `torch.autocast`, letting Tensor Cores on Ampere/Ada GPUs do the heavy matrix math in fp16. Output is cast back to float32 so nothing downstream notices. Expect roughly 2x throughput on the flow computation step on modern hardware.
+
+**Fixed a silent bug: `cv2.resize` result was discarded** — The original `_compute_flow` called `cv2.resize(flow_np, original_size)` but didn't assign the result back. The flow was returned unresized. In practice RAFT's padding/unpadding usually lands back at the right size anyway, but the resize was both wrong *and* doing useless work. Fixed.
+
+**Vectorized batch tensor conversion** — `batched_tensor_to_cv2_list` was calling `.cpu()`, `* 255`, and `.astype()` individually on every frame in a loop. For a 100-frame video that's 300 redundant operations where 3 would do. We now move the whole batch tensor to CPU and scale it in a single vectorized NumPy op, then only loop for `cvtColor` (which OpenCV doesn't batch).
+
 ## Credits
 
 jamriska - https://github.com/jamriska/ebsynth

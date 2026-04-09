@@ -21,7 +21,10 @@ def to_np(tsr: torch.Tensor, color=cv2.COLOR_RGB2BGR) -> np.ndarray:
 def batched_tensor_to_cv2_list(
     tensor_imgs: torch.Tensor, color=cv2.COLOR_RGB2BGR
 ) -> list[np.ndarray]:
-    return [to_np(tsr, color) for tsr in tensor_imgs]
+    # Move the whole batch to CPU and scale in one vectorized op instead of
+    # calling .cpu() / * 255 / .astype() N times in a loop.
+    np_batch = (tensor_imgs.cpu().numpy() * 255).astype(np.uint8)
+    return [cv2.cvtColor(frame, color) for frame in np_batch]
 
 
 def cv2_img_to_tensor(np_array: np.ndarray):
