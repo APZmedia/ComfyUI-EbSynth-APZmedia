@@ -23,6 +23,7 @@ from .Ezsynth.ezsynth.constants import (
 )
 from .Ezsynth.ezsynth.main_ez import EzsynthBase, ImageSynthBase
 from .Ezsynth.ezsynth.utils.flow_utils.OpticalFlow import RAFT_flow
+from . import ensure_cupy, CUPY_AVAILABLE
 from .utils import (
     batched_tensor_to_cv2_list,
     cv2_img_to_tensor,
@@ -352,6 +353,9 @@ class ES_VideoTransfer:
         print(f"{source_video.shape=}")
         print(f"{style_images.shape=}")
 
+        if use_poisson_cupy and not CUPY_AVAILABLE:
+            use_poisson_cupy = ensure_cupy()
+
         img_frs_seq = batched_tensor_to_cv2_list(source_video)
         stl_frs = batched_tensor_to_cv2_list(style_images)
         stl_idxes = sorted(deserialize_integers(style_idxes))
@@ -530,6 +534,9 @@ class ES_VideoTransferExtra:
     ):
         print(f"{source_video.shape=}")
         print(f"{style_images.shape=}")
+
+        if use_poisson_cupy and not CUPY_AVAILABLE:
+            use_poisson_cupy = ensure_cupy()
 
         img_frs_seq = batched_tensor_to_cv2_list(source_video)
         stl_frs = batched_tensor_to_cv2_list(style_images)

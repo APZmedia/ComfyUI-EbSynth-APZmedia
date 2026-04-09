@@ -34,6 +34,40 @@ _ezsynth_init = _ezsynth / "__init__.py"
 if not _ezsynth_init.exists():
     _ezsynth_init.touch()
 
+# ── Optional CuPy for GPU Poisson blending ───────────────────────────────────
+def _check_cupy() -> bool:
+    try:
+        import cupy  # noqa: F401
+        print(f"[comfyui-ebsynth] CuPy {cupy.__version__} detected — GPU Poisson blending available.")
+        return True
+    except ImportError:
+        return False
+
+def ensure_cupy() -> bool:
+    """Install CuPy if missing. Called lazily when use_poisson_cupy=True is first used."""
+    if _check_cupy():
+        return True
+    try:
+        import torch
+        major = int(torch.version.cuda.split(".")[0])
+        pkg = f"cupy-cuda{major}x"
+    except Exception:
+        pkg = "cupy-cuda12x"
+    print(f"[comfyui-ebsynth] CuPy not found. Installing {pkg} for GPU Poisson blending...")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", pkg],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print(f"[comfyui-ebsynth] {pkg} installed successfully.")
+        return True
+    print(f"[comfyui-ebsynth] Could not install {pkg}:\n{result.stderr.strip()}")
+    print(f"[comfyui-ebsynth] To install manually:  pip install {pkg}")
+    return False
+
+CUPY_AVAILABLE = _check_cupy()
+# ─────────────────────────────────────────────────────────────────────────────
+
 from .run import (
     ES_Guides7,
     ES_Translate,
