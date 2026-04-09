@@ -76,6 +76,23 @@ def _raft_mp_compute(self, img1: np.ndarray, img2: np.ndarray) -> np.ndarray:
 
 RAFT_flow._compute_flow = _raft_mp_compute
 
+# 3. Safe get_flow
+#    Ezsynth's get_flow accesses img_frs_seq[i + step] without bounds checking.
+#    When fr_end_idx equals len(img_frs_seq) the last loop iteration goes one
+#    past the end and crashes after potentially 30+ minutes of processing.
+#    Clamp the neighbour index to [0, n-1] so the access is always safe.
+from .Ezsynth.ezsynth import aux_run as _aux_run
+
+def _safe_get_flow(img_frs_seq, rafter, step, is_forward, i):
+    n = len(img_frs_seq)
+    j = max(0, min(i + step, n - 1))
+    if is_forward:
+        return rafter._compute_flow(img_frs_seq[i], img_frs_seq[j])
+    else:
+        return rafter._compute_flow(img_frs_seq[j], img_frs_seq[i])
+
+_aux_run.get_flow = _safe_get_flow
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 flow_all_models = []
